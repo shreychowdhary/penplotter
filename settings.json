@@ -7,6 +7,8 @@
     "max_line_length": 0.1,
     "pen_down_speed": 0.0008,
     "pen_up_speed": 0.0004,
+    "servo_down_speed": 0.0125,
+    "servo_up_speed": 0.0075,
     "left_direction_pin": 14,
     "left_step_pin": 15,
     "left_enable_pin": 18,

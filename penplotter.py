@@ -25,6 +25,8 @@ class PenPlotter:
         self.servo_pin = data["servo_pin"]
         self.pen_down_speed = data["pen_down_speed"]
         self.pen_up_speed = data["pen_up_speed"]
+        self.servo_down_speed = data["servo_down_speed"]
+        self.servo_up_speed = data["servo_up_speed"]
 
         self.x0 = (self.width**2 - self.right0**2 + self.left0**2)/(2*self.width)
         self.y0 = math.sqrt(self.left0**2-self.x0**2)
@@ -127,7 +129,7 @@ class PenPlotter:
             return
         for i in range(101):
             self.pi.set_servo_pulsewidth(self.servo_pin, i*10+1000)
-            sleep(0.02)
+            sleep(self.servo_down_speed)
         self.is_pen_down = True
 
     def pen_up(self):
@@ -135,7 +137,7 @@ class PenPlotter:
             return
         for i in range(101):
             self.pi.set_servo_pulsewidth(self.servo_pin, 2000-i*10)
-            sleep(0.01)
+            sleep(self.servo_up_speed)
         self.is_pen_down = False
 
     def run_gcode(self, gcode_file):
@@ -193,6 +195,7 @@ class PenPlotter:
         i = 0
         cur_x, cur_y = 0,0
         total_time = 0
+        pen_up=True
         for line in file:
             # Get rid of gcode comments
             line = line.split(";")[0]
@@ -207,6 +210,8 @@ class PenPlotter:
                 pass
                 #absolute position
             elif command == "G0":
+                if not pen_up:
+                    total_time += 100*self.servo_up_speed
                 x = float(tokens[1][1:])
                 y = float(tokens[2][1:])
                 dist = math.sqrt((cur_x-x)**2+(cur_y-y)**2)
@@ -214,7 +219,10 @@ class PenPlotter:
                 steps = max(left_steps, right_steps)
                 total_time += steps * self.pen_up_speed
                 cur_x,cur_y = x,y
+                pen_up = True
             elif command == "G1":
+                if pen_up:
+                    total_time += 100*self.servo_down_speed
                 x = float(tokens[1][1:])
                 y = float(tokens[2][1:])
                 dist = math.sqrt((cur_x-x)**2+(cur_y-y)**2)
@@ -222,11 +230,13 @@ class PenPlotter:
                 steps = max(left_steps, right_steps)
                 total_time += steps * self.pen_down_speed
                 cur_x,cur_y = x,y
+                pen_up = False
             elif command == "M2":
                 #end program
                 break
             else:
                 print("UNKNOWN", command)
+        print("Estimated Time: ", total_time/60)
     
 
 if __name__ == "__main__":
