@@ -1,0 +1,17 @@
+{
+    "width": 1565.275,
+    "left0": 977.9,
+    "right0": 977.9,
+    "rot_dist": 40,
+    "rot_steps": 3200,
+    "max_line_length": 0.1,
+    "pen_down_speed": 0.0008,
+    "pen_up_speed": 0.0004,
+    "left_direction_pin": 14,
+    "left_step_pin": 15,
+    "left_enable_pin": 18,
+    "right_direction_pin": 16,
+    "right_step_pin": 20,
+    "right_enable_pin": 21,
+    "servo_pin": 2
+}
