@@ -13,6 +13,8 @@ class PenPlotter:
         self.width = data["width"]
         self.left0 = data["left0"]
         self.right0 = data["right0"]
+        self.offset_x = data["offset_x"]
+        self.offset_y = data["offset_y"]
         self.rot_dist = data["rot_dist"]
         self.rot_steps = data["rot_steps"]
         self.max_line_length = data["max_line_length"]
@@ -34,7 +36,7 @@ class PenPlotter:
         self.left_step_sum, self.right_step_sum = 0,0
         self.cur_x = 0
         self.cur_y = 0
-        self.is_pen_down = True
+        self.is_pen_down = False
         self.pi = pigpio.pi()
 
         self.pi.set_mode(self.left_direction_pin, pigpio.OUTPUT)
@@ -73,6 +75,7 @@ class PenPlotter:
             self.right_roundoff += right_steps - int(right_steps)
             left_steps = int(left_steps)
             right_steps = int(right_steps)
+            
             if abs(self.left_roundoff) >= 1:
                 left_steps += 1 if self.left_roundoff > 0 else -1
                 self.left_roundoff -= 1 if self.left_roundoff > 0 else -1
@@ -88,46 +91,41 @@ class PenPlotter:
             right_steps = abs(right_steps)
             self.pi.write(self.left_direction_pin, left_dir)
             self.pi.write(self.right_direction_pin, right_dir)
-            cur_left, cur_right = 0,0
 
-            self.pi.wave_add_generic([
-                pigpio.pulse(1<<self.left_step_pin | 1 << self.right_step_pin, 0, int(1000000*pen_speed)),
-                pigpio.pulse(0, 1<<self.left_step_pin | 1 << self.right_step_pin, int(1000000*pen_speed))
-            ])
-            combined_wave_id = self.pi.wave_create()
-            step_pin = self.left_step_pin if left_steps > right_steps else self.right_step_pin
-            self.pi.wave_add_generic([
-                pigpio.pulse(1<<step_pin, 0, int(1000000*pen_speed)),
-                pigpio.pulse(0, 1<<step_pin, int(1000000*pen_speed))
-            ])
-            remaining_wave_id = self.pi.wave_create()
             combined_steps = min(left_steps, right_steps)
             steps_remaining = max(left_steps, right_steps) - combined_steps
-            self.pi.wave_chain([
-                255, 0, combined_wave_id, 255, 1, combined_steps%256, combined_steps//256,
-                255, 0, remaining_wave_id, 255, 1, steps_remaining%256, steps_remaining//256
-            ])
-            while self.pi.wave_tx_busy():
-                sleep(0.001)
-            self.pi.wave_delete(combined_wave_id)
-            self.pi.wave_delete(remaining_wave_id)
+
+            for i in range(combined_steps):
+                self.pi.write(self.left_step_pin, 1)
+                self.pi.write(self.right_step_pin, 1)
+                sleep(pen_speed)
+                self.pi.write(self.left_step_pin, 0)
+                self.pi.write(self.right_step_pin, 0)
+                sleep(pen_speed)
+            
+            step_pin = self.left_step_pin if left_steps > right_steps else self.right_step_pin
+            for i in range(steps_remaining):
+                self.pi.write(step_pin, 1)
+                sleep(pen_speed)
+                self.pi.write(step_pin, 0)
+                sleep(pen_speed)
             self.cur_x = x
             self.cur_y = y
         
-    def calculate_pos_from_steps(self):
-        delta_left = (self.left_step_sum/self.rot_steps)*self.rot_dist
-        delta_right = (self.right_step_sum/self.rot_steps)*self.rot_dist
+    def calculate_pos_from_steps(self, left_steps, right_steps):
+        delta_left = (left_steps/self.rot_steps)*self.rot_dist
+        delta_right = (right_steps/self.rot_steps)*self.rot_dist
         
         left_length = delta_left + self.left0
         right_length = delta_right + self.right0
         x = (self.width**2+left_length**2-right_length**2)/(2*self.width)
         y = math.sqrt(right_length**2-(self.width-x)**2)
-        return x,y
+        return x-self.x0,y-self.y0
 
     def pen_down(self):
         if self.is_pen_down:
             return
-        for i in range(101):
+        for i in range(81):
             self.pi.set_servo_pulsewidth(self.servo_pin, i*10+1000)
             sleep(self.servo_down_speed)
         self.is_pen_down = True
@@ -135,13 +133,15 @@ class PenPlotter:
     def pen_up(self):
         if not self.is_pen_down:
             return
-        for i in range(101):
-            self.pi.set_servo_pulsewidth(self.servo_pin, 2000-i*10)
+        for i in range(81):
+            self.pi.set_servo_pulsewidth(self.servo_pin, 1800-i*10)
             sleep(self.servo_up_speed)
         self.is_pen_down = False
 
     def run_gcode(self, gcode_file):
         self.running = True
+        self.left_roundoff = 0
+        self.right_roundoff = 0
         file = open(gcode_file)
         i = 0
         for line in file:
@@ -162,15 +162,15 @@ class PenPlotter:
                 #absolute position
             elif command == "G0":
                 self.pen_up()
-                x = float(tokens[1][1:])
-                y = float(tokens[2][1:])
+                x = float(tokens[1][1:])+self.offset_x
+                y = float(tokens[2][1:])+self.offset_y
                 print("G0", x, y, i)
                 self.go_to(x, y, pen_down=False)
             elif command == "G1":
                 self.pen_down() 
-                x = float(tokens[1][1:])
-                y = float(tokens[2][1:])
-                print("G1", x, y, i)
+                x = float(tokens[1][1:])+self.offset_x
+                y = float(tokens[2][1:])+self.offset_y
+                #print("G1", x, y, i)
                 self.go_to(x,y, pen_down=True)
             elif command == "M2":
                 #end program
@@ -178,10 +178,10 @@ class PenPlotter:
             else:
                 print("UNKNOWN", command)
 
-        print("DONE")
         self.pen_up()
-        self.go_to(0,0, pen_down=False)
-            
+        self.go_to(0,0, pen_down=True)
+        print("DONE")
+
 
     def __del__(self):
         self.pi.stop()
@@ -195,7 +195,7 @@ class PenPlotter:
         i = 0
         cur_x, cur_y = 0,0
         total_time = 0
-        pen_up=True
+        pen_up = True
         for line in file:
             # Get rid of gcode comments
             line = line.split(";")[0]
@@ -211,25 +211,44 @@ class PenPlotter:
                 #absolute position
             elif command == "G0":
                 if not pen_up:
-                    total_time += 100*self.servo_up_speed
-                x = float(tokens[1][1:])
-                y = float(tokens[2][1:])
+                    total_time += 80*self.servo_up_speed
+                x = float(tokens[1][1:])+self.offset_x
+                y = float(tokens[2][1:])+self.offset_y
                 dist = math.sqrt((cur_x-x)**2+(cur_y-y)**2)
                 left_steps, right_steps = self.calculate_steps(cur_x, cur_y, x, y)
                 steps = max(left_steps, right_steps)
-                total_time += steps * self.pen_up_speed
+                total_time += steps * 2 * self.pen_up_speed
                 cur_x,cur_y = x,y
                 pen_up = True
             elif command == "G1":
                 if pen_up:
-                    total_time += 100*self.servo_down_speed
-                x = float(tokens[1][1:])
-                y = float(tokens[2][1:])
-                dist = math.sqrt((cur_x-x)**2+(cur_y-y)**2)
-                left_steps, right_steps = self.calculate_steps(cur_x, cur_y, x, y)
-                steps = max(left_steps, right_steps)
-                total_time += steps * self.pen_down_speed
-                cur_x,cur_y = x,y
+                    total_time += 80*self.servo_down_speed
+                target_x = float(tokens[1][1:])+self.offset_x
+                target_y = float(tokens[2][1:])+self.offset_y
+                dist = math.sqrt((cur_x-target_x)**2+(cur_y-target_y)**2)
+                orig_x, orig_y = cur_x, cur_y
+                num_segments = math.ceil(dist/self.max_line_length)
+                for i in range(num_segments):
+                    x = (target_x-orig_x)*(i+1)/num_segments + orig_x 
+                    y = (target_y-orig_y)*(i+1)/num_segments + orig_y
+                    left_steps, right_steps = self.calculate_steps(cur_x, cur_y, x, y)
+                    self.left_roundoff += left_steps - int(left_steps)
+                    self.right_roundoff += right_steps - int(right_steps)
+                    left_steps = int(left_steps)
+                    right_steps = int(right_steps)
+                    
+                    if abs(self.left_roundoff) >= 1:
+                        left_steps += 1 if self.left_roundoff > 0 else -1
+                        self.left_roundoff -= 1 if self.left_roundoff > 0 else -1
+                    if abs(self.right_roundoff) >= 1:
+                        right_steps += 1 if self.right_roundoff > 0 else -1
+                        self.right_roundoff -= 1 if self.right_roundoff > 0 else -1
+
+                    left_steps = abs(left_steps)
+                    right_steps = abs(right_steps)
+                    steps = max(left_steps, right_steps)
+                    total_time += steps * 2 * self.pen_down_speed
+                    cur_x, cur_y = x, y
                 pen_up = False
             elif command == "M2":
                 #end program
